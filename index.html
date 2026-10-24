@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>♥</title>
+<style>
+  :root {
+    --bg: #f7e9e6;
+    --ink: #4a2f3a;
+    --soft: #8a6470;
+    --core: #c9566d;
+    --glow: #e7a1ad;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #231b29;
+      --ink: #f3dde2;
+      --soft: #b493a0;
+      --core: #e07a90;
+      --glow: #7a3d55;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    padding: env(safe-area-inset-top, 0px) 24px env(safe-area-inset-bottom, 0px);
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  main { display: grid; justify-items: center; gap: 32px; }
+  .orb {
+    position: relative;
+    width: min(46vw, 200px);
+    aspect-ratio: 1;
+    border: none;
+    border-radius: 50%;
+    background: var(--core);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: transform 160ms ease, opacity 300ms ease;
+  }
+  .orb:active { transform: scale(0.96); }
+  .orb:focus-visible { outline: 3px solid var(--ink); outline-offset: 6px; }
+  .orb svg { width: 36%; height: auto; fill: currentColor; }
+  .orb::before, .orb::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 2px solid var(--core);
+    opacity: 0;
+    pointer-events: none;
+  }
+  body.playing .orb::before { animation: ring 2.4s ease-out infinite; }
+  body.playing .orb::after  { animation: ring 2.4s ease-out 1.2s infinite; }
+  @keyframes ring {
+    from { transform: scale(1);   opacity: 0.55; }
+    to   { transform: scale(1.9); opacity: 0; }
+  }
+  .hint { font-size: 1.15rem; font-style: italic; color: var(--soft); min-height: 1.6em; max-width: 30ch; line-height: 1.5; }
+  body.loading .orb { opacity: 0.5; cursor: default; }
+  body.error .orb { opacity: 0.35; cursor: default; }
+  @media (prefers-reduced-motion: reduce) {
+    body.playing .orb::before, body.playing .orb::after { animation: none; }
+    body.playing .orb { box-shadow: 0 0 0 14px var(--glow); }
+  }
+</style>
+</head>
+<body class="loading">
+<main>
+  <button class="orb" id="orb" type="button" aria-label="Loading">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+  </button>
+  <p class="hint" id="hint" aria-live="polite">Loading the clip…</p>
+</main>
+<audio id="clip" preload="auto"></audio>
+<script>
+  // Tag link format: https://<you>.github.io/<repo>/?c=07#<key>
+  // The part after # is this clip's key. Browsers never send it to the website,
+  // so the site only ever stores and serves scrambled files (07.bin).
+  const TYPES = { 1: "audio/mpeg", 2: "audio/mp4" };
+
+  const audio = document.getElementById("clip");
+  const hint = document.getElementById("hint");
+  const orb = document.getElementById("orb");
+  let state = "loading";
+
+  function setState(next) {
+    state = next;
+    document.body.className = next;
+    const copy = {
+      loading: ["Loading the clip…", "Loading"],
+      ready:   ["Tap to listen", "Play"],
+      playing: ["", "Pause"],
+      paused:  ["Tap to keep listening", "Play"],
+      ended:   ["Tap to hear it again", "Play again"]
+    }[next];
+    hint.textContent = copy[0];
+    orb.setAttribute("aria-label", copy[1]);
+  }
+
+  function showError(message) {
+    state = "error";
+    document.body.className = "error";
+    orb.disabled = true;
+    hint.textContent = message;
+  }
+
+  function b64urlToBytes(text) {
+    let s = text.trim().replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    const bin = atob(s);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  async function unlock(keyText, data) {
+    const keyBytes = b64urlToBytes(keyText);
+    if (keyBytes.length !== 16 || data.length < 29) throw new Error("Key or file is the wrong size");
+    const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
+    const plain = new Uint8Array(
+      await crypto.subtle.decrypt({ name: "AES-GCM", iv: data.subarray(0, 12) }, key, data.subarray(12))
+    );
+    return { type: TYPES[plain[0]] || "audio/mpeg", bytes: plain.subarray(1) };
+  }
+
+  async function start() {
+    const params = new URLSearchParams(location.search);
+    const raw = (params.get("c") || "").trim();
+    const id = /^\d{1,3}$/.test(raw) ? raw.padStart(2, "0") : null;
+    // The key normally sits after #. Backup format, if a phone ever drops that part: ?c=07&k=<key>
+    const keyText = location.hash.slice(1) || (params.get("k") || "").trim();
+
+    if (!id || !keyText) return showError("This tag’s link is incomplete. Rewrite it from your tag links file.");
+    if (!window.crypto || !crypto.subtle) return showError("This browser can’t unlock clips. Open the link in Safari or Chrome.");
+
+    let data;
+    try {
+      const res = await fetch(id + ".bin");
+      if (!res.ok) return showError("Clip " + id + " isn’t on the site yet. Upload " + id + ".bin next to index.html.");
+      data = new Uint8Array(await res.arrayBuffer());
+    } catch {
+      return showError("Couldn’t reach the site. Check the phone is online, then tap the card again.");
+    }
+
+    let clip;
+    try {
+      clip = await unlock(keyText, data);
+    } catch {
+      return showError("This tag’s key doesn’t match clip " + id + ". Rewrite it from your tag links file.");
+    }
+
+    audio.addEventListener("playing", () => setState("playing"));
+    audio.addEventListener("pause", () => { if (!audio.ended) setState("paused"); });
+    audio.addEventListener("ended", () => setState("ended"));
+    audio.addEventListener("error", () => showError("Clip " + id + " can’t be played on this phone. Re-export it as MP3 and lock it again."));
+    audio.src = URL.createObjectURL(new Blob([clip.bytes], { type: clip.type }));
+
+    setState("ready");
+    audio.play().catch(() => {}); // Some Android phones allow this; most need the one tap below.
+  }
+
+  document.body.addEventListener("click", () => {
+    if (state === "loading" || state === "error") return;
+    if (audio.paused) audio.play().catch(() => {});
+    else audio.pause();
+  });
+
+  start();
+</script>
+</body>
+</html>
